@@ -215,7 +215,10 @@ func writeSSEEvent(w http.ResponseWriter, e Event) error {
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(w, "id: %s\nevent: %s\ndata: %s\n\n", e.ID, e.Type, data)
+	// Emit as unnamed data message so browsers can catch all events
+	// with a single addEventListener('message') listener. The event
+	// type is already present inside the JSON payload.
+	_, err = fmt.Fprintf(w, "id: %s\ndata: %s\n\n", e.ID, data)
 	return err
 }
 
