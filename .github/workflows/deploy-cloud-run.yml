@@ -1,0 +1,119 @@
+name: Deploy to Cloud Run
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "*.go"
+      - "go.mod"
+      - "go.sum"
+      - "Dockerfile"
+      - ".github/workflows/deploy-cloud-run.yml"
+  workflow_dispatch:
+
+# Cancel in-progress runs for the same branch to prevent concurrent deploys.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GCP_REGION: us-central1
+  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  SERVICE_NAME: event-stream-service
+
+jobs:
+  test:
+    name: Lint and test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run tests
+        run: go test ./... -v
+
+  deploy:
+    name: Deploy to Cloud Run
+    needs: [test]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # required for OIDC token exchange with GCP WIF
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate deploy configuration
+        id: deploy_config
+        run: |
+          if [ -z "${{ env.GCP_PROJECT_ID }}" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Skipping deploy: repository variable GCP_PROJECT_ID is not set."
+            exit 0
+          fi
+
+          if [ -z "${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Skipping deploy: repository secret GCP_WORKLOAD_IDENTITY_PROVIDER is not set."
+            exit 0
+          fi
+
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate to Google Cloud
+        if: steps.deploy_config.outputs.enabled == 'true'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        if: steps.deploy_config.outputs.enabled == 'true'
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        if: steps.deploy_config.outputs.enabled == 'true'
+        run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
+
+      - name: Build and push image
+        if: steps.deploy_config.outputs.enabled == 'true'
+        run: |
+          IMAGE="${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/microservices/${{ env.SERVICE_NAME }}:${{ github.sha }}"
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+
+      - name: Deploy to Cloud Run
+        if: steps.deploy_config.outputs.enabled == 'true'
+        run: |
+          for attempt in 1 2 3; do
+            gcloud run deploy "${{ env.SERVICE_NAME }}" \
+              --image "$IMAGE" \
+              --region "${{ env.GCP_REGION }}" \
+              --platform managed \
+              --port 8080 \
+              --memory 256Mi \
+              --cpu 1 \
+              --min-instances 0 \
+              --max-instances 3 \
+              --service-account "${{ secrets.GCP_SERVICE_ACCOUNT }}" \
+              --set-env-vars "^#^ALLOWED_ORIGINS=${{ vars.ALLOWED_ORIGINS }}" \
+              --set-secrets "AUTH_JWT_SECRET=AUTH_JWT_SECRET:latest" \
+              --quiet && break
+            echo "::warning::Deploy attempt $attempt failed. Retrying in $((attempt * 20))s..."
+            sleep $((attempt * 20))
+          done
+
+      - name: Allow unauthenticated access
+        if: steps.deploy_config.outputs.enabled == 'true'
+        run: |
+          gcloud run services add-iam-policy-binding "${{ env.SERVICE_NAME }}" \
+            --region "${{ env.GCP_REGION }}" \
+            --member="allUsers" \
+            --role="roles/run.invoker"

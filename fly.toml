@@ -1,3 +1,7 @@
+# NOTE: This service has been migrated to GCP Cloud Run (v1.4, 2026-05-06).
+# This fly.toml is kept for reference only. The active deployment is now
+# managed by .github/workflows/deploy-cloud-run.yml.
+#
 app = "event-stream-service"
 primary_region = "iad"
 
