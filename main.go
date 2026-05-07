@@ -19,11 +19,12 @@ import (
 
 // Event is the canonical unit published to the stream.
 type Event struct {
-	ID        string          `json:"id"`
-	Source    string          `json:"source"`
-	Type      string          `json:"type"`
-	Payload   json.RawMessage `json:"payload,omitempty"`
-	Timestamp string          `json:"timestamp"`
+	ID         string          `json:"id"`
+	Source     string          `json:"source"`
+	Type       string          `json:"type"`
+	Payload    json.RawMessage `json:"payload,omitempty"`
+	Timestamp  string          `json:"timestamp"`
+	Traceparent string          `json:"traceparent,omitempty"` // W3C Trace Context for distributed tracing
 }
 
 type publishRequest struct {
@@ -35,6 +36,19 @@ type publishRequest struct {
 type errorResponse struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Tracing
+// ────────────────────────────────────────────────────────────────────────────
+
+func extractTraceparent(r *http.Request) string {
+	// Extract W3C traceparent header for distributed tracing
+	if tp := r.Header.Get("Traceparent"); tp != "" {
+		return tp
+	}
+	// Fallback to lowercase (some clients may send it lowercase)
+	return r.Header.Get("traceparent")
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -145,14 +159,15 @@ func publishHandler(hub *Hub, jwtSecret string, allowedOrigins []string) http.Ha
 		}
 
 		e := Event{
-			ID:      uuid.New().String(),
-			Source:  req.Source,
-			Type:    req.Type,
-			Payload: req.Payload,
+			ID:          uuid.New().String(),
+			Source:      req.Source,
+			Type:        req.Type,
+			Payload:     req.Payload,
+			Traceparent: extractTraceparent(r),
 		}
 		hub.Publish(e)
 
-		slog.Info("event published", "id", e.ID, "source", e.Source, "type", e.Type)
+		slog.Info("event published", "id", e.ID, "source", e.Source, "type", e.Type, "traceparent", e.Traceparent)
 		writeJSON(w, http.StatusAccepted, map[string]string{"id": e.ID})
 	}
 }
