@@ -19,11 +19,11 @@ import (
 
 // Event is the canonical unit published to the stream.
 type Event struct {
-	ID         string          `json:"id"`
-	Source     string          `json:"source"`
-	Type       string          `json:"type"`
-	Payload    json.RawMessage `json:"payload,omitempty"`
-	Timestamp  string          `json:"timestamp"`
+	ID          string          `json:"id"`
+	Source      string          `json:"source"`
+	Type        string          `json:"type"`
+	Payload     json.RawMessage `json:"payload,omitempty"`
+	Timestamp   string          `json:"timestamp"`
 	Traceparent string          `json:"traceparent,omitempty"` // W3C Trace Context for distributed tracing
 }
 
@@ -125,7 +125,7 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 func healthHandler(hub *Hub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
-			"status":           "ok",
+			"status":            "ok",
 			"connected_clients": hub.ClientCount(),
 		})
 	}
