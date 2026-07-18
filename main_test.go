@@ -2,9 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -99,4 +101,39 @@ func TestHubRingBufferReplay(t *testing.T) {
 	if len(replay) != 5 {
 		t.Errorf("expected 5 replay events, got %d", len(replay))
 	}
+}
+
+// TestHubConcurrentPublishUnsubscribeNoPanic stress-tests the fan-out against
+// subscriber churn. Before the fix, Unsubscribe closed the channel while Publish
+// sent to a snapshot of it outside the lock, so a disconnect racing a publish
+// panicked with "send on closed channel". A panic in the publisher goroutine
+// aborts the test process, so reaching the end without panicking is the
+// assertion. Run with -race for maximum sensitivity.
+func TestHubConcurrentPublishUnsubscribeNoPanic(t *testing.T) {
+	hub := NewHub()
+	done := make(chan struct{})
+
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				hub.Publish(Event{Source: "test", Type: "test.event"})
+			}
+		}
+	}()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 500; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			id := fmt.Sprintf("client-%d", n)
+			hub.Subscribe(id)
+			hub.Unsubscribe(id)
+		}(i)
+	}
+	wg.Wait()
+	close(done)
 }

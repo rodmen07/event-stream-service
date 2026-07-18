@@ -37,15 +37,17 @@ func (h *Hub) Subscribe(id string) (chan Event, []Event) {
 	return ch, replay
 }
 
-// Unsubscribe removes a subscriber and closes its channel.
+// Unsubscribe removes a subscriber from the fan-out map. It deliberately does
+// NOT close the channel: Publish snapshots subscriber channels under the lock and
+// then sends outside it, so closing here would let a concurrent Publish send on a
+// closed channel and panic (the select's default guards against a *full* channel,
+// not a *closed* one). The reader goroutine exits via its request context, after
+// which the now-unreferenced channel is garbage-collected.
 func (h *Hub) Unsubscribe(id string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	if ch, ok := h.subscribers[id]; ok {
-		close(ch)
-		delete(h.subscribers, id)
-	}
+	delete(h.subscribers, id)
 }
 
 // Publish adds an event to the ring buffer and fans it out to all subscribers.
